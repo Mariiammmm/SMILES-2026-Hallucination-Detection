@@ -11,14 +11,21 @@ Strategy:
 from __future__ import annotations
 import torch
 import torch.nn.functional as F
+
 _SELECTED_LAYERS = [8, 12, 16, 18, 20, 21, 22, 23, 24]
+
+
 def aggregate(
     hidden_states: torch.Tensor,
     attention_mask: torch.Tensor,
 ) -> torch.Tensor:
-    """Convert per-token hidden states into a single feature vector.
     """
-    # Convert attention mask to float and unsqueeze to (seq_len, 1)
+    Convert per-token hidden states into a single feature vector.
+    """
+    device = hidden_states.device
+    attention_mask = attention_mask.to(device)
+
+    # Build a float mask for mean pooling: (seq_len,) -> (seq_len, 1)
     mask_float = attention_mask.float().unsqueeze(-1)  # (seq_len, 1)
     n_real = mask_float.sum().clamp(min=1.0)            # scalar
 
@@ -49,7 +56,9 @@ def extract_geometric_features(
     """
     Extract hand-crafted geometric / statistical features from hidden states.
     """
-    # Convert attention mask to float and unsqueeze to (seq_len, 1)
+    device = hidden_states.device
+    attention_mask = attention_mask.to(device)
+
     mask_float = attention_mask.float().unsqueeze(-1)
     n_real = mask_float.sum().clamp(min=1.0)
 
@@ -62,7 +71,8 @@ def extract_geometric_features(
         mean_vecs.append(mean_vec)
         norms.append(mean_vec.norm().unsqueeze(0))
 
-    norms_tensor = torch.cat(norms)  
+    norms_tensor = torch.cat(norms)  # (n_selected,)
+
     # 2. Inter-layer cosine similarities between consecutive selected layers
     cos_sims = []
     for i in range(len(mean_vecs) - 1):
@@ -74,10 +84,10 @@ def extract_geometric_features(
     cos_sims_tensor = torch.stack(cos_sims)  # (n_selected - 1,)
 
     # 3. Log sequence length
-    seq_len = torch.tensor([torch.log(n_real + 1.0)])
+    seq_len = torch.tensor([torch.log(n_real + 1.0)], device=device)
 
     # 4. Std of norms across selected layers
-    std_norms = torch.tensor([norms_tensor.std()])
+    std_norms = torch.tensor([norms_tensor.std()], device=device)
 
     return torch.cat([norms_tensor, cos_sims_tensor, seq_len, std_norms], dim=0)
 
@@ -88,7 +98,8 @@ def aggregation_and_feature_extraction(
     use_geometric: bool = False,
 ) -> torch.Tensor:
     """
-    Aggregate hidden states and optionally extract geometric features.
+    Aggregate hidden states and optionally append geometric features.
+
     """
     agg_features = aggregate(hidden_states, attention_mask)
 
